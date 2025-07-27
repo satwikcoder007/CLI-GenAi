@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+
+import google.generativeai as genai
+from google.generativeai import types
+import os
+import configparser
+import argparse
+import sys
+from pathlib import Path
+from context_utils import append_context_if_exists
+from code_extract import extract_code_blocks
+from rich.console import Console
+from rich.syntax import Syntax
+from rich.markdown import Markdown
+from rich.prompt import Prompt
+import pyperclip
+import re
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-p","--Prompt",help="Enter you prompt herer",nargs='+')
+parser.add_argument("-mp", "--MultiPrompt", help="Enter your prompt here (multi-line supported via stdin)", nargs='?', const=True)
+parser.add_argument("-c", "--Context", help = "If you want to provide any file as context",nargs='+')
+args = parser.parse_args()
+
+
+prompt = "Instruction: "
+flag = 0
+if args.MultiPrompt:  
+    print("👉 Paste your multi-line prompt. Press Ctrl+D when done:\n")
+    read = sys.stdin.read()
+    prompt = f"{prompt}{read}\n"
+    flag = 1 if read is not None else 0
+
+if args.Prompt:
+    read = ' '.join(args.Prompt)
+    prompt += read
+    flag = 1 if read is not None else 0
+
+if(flag == 0):
+    print("Please Enter a prompt")
+    sys.exit(0)
+
+
+if args.Context:
+    context_text = ""
+    context_files = args.Context
+    for file in context_files:
+        context_text += append_context_if_exists(file)
+    
+    prompt = context_text + prompt
+
+output_instruction = (
+    "If there are any bugs in the code, return the corrected versions of each buggy function. "
+    "Each corrected function must be wrapped in its own separate markdown code block using triple backticks. "
+    "Include the full function definition starting from the 'def' line for each. "
+    "If you provide explanations, make sure they are outside of the code blocks. "
+    "Do not include multiple functions in the same code block. "
+    "Return only the corrected functions — skip unchanged functions.\n\n"
+)
+
+prompt = prompt+'\n'+output_instruction
+
+config = configparser.ConfigParser()
+script_dir = Path(__file__).resolve().parent
+config_path = script_dir / "config.ini"
+config.read(config_path)
+
+genai.configure(api_key=config.get("gemini","API_KEY"))
+
+model = genai.GenerativeModel(config.get("gemini","model"))
+
+response = model.generate_content(
+    prompt,
+    generation_config=genai.types.GenerationConfig(
+        temperature=0.1,
+        top_p=0.1,
+        top_k=1
+    )
+)
+
+console = Console()
+console.rule("[bold green]Response")
+console.print(Markdown(response.text))
+
+code_blocks = extract_code_blocks(response.text)
+
+def extract_function_name(code: str) -> str:
+    match = re.search(r'def\s+(\w+)\s*\(', code)
+    return match.group(1) if match else None
+
+def replace_function_in_code(original_code: str, func_name: str, new_func_code: str) -> str:
+    pattern = re.compile(
+        rf"def {func_name}\s*\([^)]*\)(.*?)(?=\ndef |\Z)",  # matches from def line to next def or EOF
+        re.DOTALL
+    )
+    updated_code, count = pattern.subn(new_func_code, original_code)
+    return updated_code if count > 0 else original_code
+
+# Load the original file
+original_file = args.Context[0]
+with open(original_file, 'r') as f:
+    original_code = f.read()
+
+final_code = original_code
+
+for block in code_blocks:
+    syntax = Syntax(block, "python", theme="monokai", line_numbers=True)
+    console.rule("[bold cyan]Suggested Code")
+    console.print(syntax)
+
+    action = Prompt.ask(
+        "[bold green]Choose an action: [c] Copy  [o] Overwrite  [s] Skip[/bold green]",
+        choices=["c", "o", "s"],
+        default="s"
+    )
+
+    if action == "c":
+        pyperclip.copy(block)
+        console.print("[yellow]✔ Code copied to clipboard![/yellow]")
+    elif action == "o":
+        func_name = extract_function_name(block)
+        if func_name:
+            updated = replace_function_in_code(final_code, func_name, block)
+            if updated != final_code:
+                final_code = updated
+                console.print(f"[green]✔ Patched and replaced `{func_name}` in the code.[/green]")
+            else:
+                console.print(f"[yellow]⚠ Could not find `{func_name}` to replace in the original file.[/yellow]")
+        else:
+            console.print("[red]❌ Function name could not be extracted. Skipping overwrite.[/red]")
+    else:
+        console.print("[yellow]⏭ Skipped this block.[/yellow]")
+
+console.rule("[bold green]End")
+
+# Ask to save if there was any overwrite
+if final_code != original_code:
+    save = Prompt.ask("💾 Do you want to overwrite the original file with changes?", choices=["y", "n"], default="y")
+    if save == "y":
+        with open(original_file, 'w') as f:
+            f.write(final_code)
+        console.print("[bold green]✅ File successfully updated.[/bold green]")
+    else:
+        console.print("[bold yellow]📝 File not modified.[/bold yellow]")
+
+
