@@ -15,7 +15,7 @@ from rich.markdown import Markdown
 from rich.prompt import Prompt
 import pyperclip
 import re
-
+from utils.fix_Prompt import fix_prompt
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-p","--Prompt",help="Enter you prompt herer",nargs='+')
@@ -43,12 +43,15 @@ if(flag == 0):
 
 
 if args.Context:
-    context_text = ""
+    file_metadata={}
     context_files = args.Context
     for file in context_files:
-        context_text += append_context_if_exists(file)
+        file_metadata= append_context_if_exists(file)
     
-    prompt = context_text + prompt
+    formatted_fix_prompt = fix_prompt.format(
+    file_extension=file_metadata['type'],
+    file_content=file_metadata['content']
+    )
 
 output_instruction = (
     "If there are any bugs in the code, return the corrected versions of each buggy function. "
@@ -59,7 +62,7 @@ output_instruction = (
     "Return only the corrected functions — skip unchanged functions.\n\n"
 )
 
-prompt = prompt+'\n'+output_instruction
+prompt = formatted_fix_prompt+'\n'+output_instruction
 
 config = configparser.ConfigParser()
 script_dir = Path(__file__).resolve().parent

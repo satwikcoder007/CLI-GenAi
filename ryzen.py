@@ -1,0 +1,56 @@
+from langchain_google_genai import ChatGoogleGenerativeAI
+from dotenv import load_dotenv
+
+import argparse
+from utils.context_utils import append_context_if_exists
+from utils.code_extract import extract_code_blocks
+from utils.cli_args import parse_cli_args
+from utils.user_prompt import User_Prompt
+from utils.structured_output import StructuredResponse
+
+from rich.console import Console
+from rich.syntax import Syntax
+from rich.markdown import Markdown
+from rich.prompt import Prompt
+
+console = Console()
+
+file_metadata, task_instruction = parse_cli_args()
+
+formatted_fix_prompt = User_Prompt.format(                              # Input Prompt Formatted
+    file_extension=file_metadata['type'],
+    file_content=file_metadata['content'],
+    task_instruction=task_instruction
+)
+
+load_dotenv()   # API KEY is loaded
+
+
+model = ChatGoogleGenerativeAI(model="gemini-2.5-pro",temperature=0.1)  # Model called
+improved_model=model.with_structured_output(StructuredResponse)         # Model tuned for fixed Output Structure
+
+result=improved_model.invoke(formatted_fix_prompt)                      # Prompt Sent
+
+
+
+console.rule("[bold green]Response")    ######  Formatting the output in CLI. 
+for item in result.functions:
+    # console.rule(f"[bold blue]{item.function_name}")
+    if item.code:
+        console.print("[bold yellow]Corrected Code:")
+        syntax = Syntax(
+            code=item.code,
+            lexer=file_metadata['type'], 
+            line_numbers=True,
+            theme="monokai", 
+            word_wrap=False
+        )
+        console.print(syntax)
+        
+    if item.description:
+        console.print("[bold yellow]Description:")
+        console.print(item.description)
+
+console.rule("[bold green]End")    
+    
+

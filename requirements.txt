@@ -3,3 +3,13 @@ google-generativeai
 python-dotenv
 rich
 pyperclip
+
+langchain
+langchain-core
+
+python-dotenv
+
+langchain-google-genai
+google-generativeai
+
+pydantic
